@@ -121,3 +121,54 @@ sprite greys), `rubber`, `glass`, `light`, plus the printed-outline roles
 `paintGlass` (glass + metalDark band). Each style (Matte, Sprite, Glossy)
 has its own material for every role, and switching style swaps them by role
 name, so never hard-code a colour or make your own material for a role.
+
+## Image skins (`image.js`): the game's PNG-layer format
+
+A skin file is JSON: `spec` (`base` tinted image, `notint` image, `rotors`
+with position, size, speed in degrees per frame, `layer`, `visibility`,
+`tinted`; and an overall `size`) plus the images as data URLs. The builder
+follows the game's drawing rules exactly (layer order, rotor placement and
+size, tinting by multiplication, moving-only / idle-only layers) and turns
+each layer into 3D:
+
+- **Layer analysis.** Mostly opaque layers are solid parts; fully see-through
+  layers (glows) become glowing planes; part see-through layers (a motion-
+  blurred arc with a solid weight) are both. Two-tone art (fill + line, like
+  the original sprites) is told apart from hand-shaded art.
+- **Shape from transparency.** Each opaque area is traced (`geometry/trace.js`,
+  marching squares with sub-pixel edges, holes included) and inflated into a
+  smooth part; grey drawn hardware (blades, gears, guns) becomes rigid,
+  flat-topped parts. A part's shape comes from its outline only: the art's
+  drawn lines are printed on it, never cut in, as on every other skin.
+- **The art, projected.** The layer image is projected straight down onto its
+  parts, so the Top view is the sprite, and tinting works as in the game (image
+  × team colour, via `set.textured()` in `styles.js`). Two-tone art is enlarged
+  4× and snapped back to its two tones for crisp lines.
+- **Stacking.** Layers sit just above what they cover, in the game's order.
+  Parts drawn on top of another part with their own outline (a canopy) rest on
+  it as low domes; even-toned overlays on hand-shaded art (painted shading) are
+  printed flat; small attached parts (a serpent over a body) hug the surface.
+  Spinning layers sit above everything they sweep, and later layers clear the
+  swept disc without resting on it.
+- **Hand-tuning** lives in `imageSkins.js`, one entry per skin. `shape(info)`
+  can sculpt any traced part: return `{ shell: { top, bottom, bevel } }` for a
+  hard-shell part (true vertical walls and crisp bevelled edges, built by
+  `shellPart` in `geometry/inflate.js`), or `{ top, bottom }` for a smooth
+  one, as functions of position. `extras(ctx)` adds hidden structure (55's axles) or extra painted
+  geometry (`info.projectUV` + `info.material`, e.g. 55's hub drums).
+  `orbit: true` lets spinning parts that only travel round a ring (28's
+  weights) circle what's inside it instead of rising above it all.
+- **Edge tone.** On steep sides the projected art would stretch, so they take
+  the layer's outline shade instead (times the team colour): the whole bevel
+  and wall on hard shells, just the vertical band on smooth parts. Steepness
+  is judged per pixel from the shading normal, and the steeper the surface the
+  blurrier the art it samples, so stretched art never streaks.
+- **Clean outlines.** Traced outlines are smoothed (corners kept) before use,
+  so walls and rims don't catch pixel wobble.
+- **Resting parts** sit on the surface beneath with narrow dips bridged over
+  (a canopy stays level), but follow broad curves.
+- **Spinning layers** sit right on their clearance level; `spinGap` sets how
+  close stacked spinning layers are (55's gears).
+- **Guns** (grey parts on the centre line, ahead of the middle, not resting on
+  the body) get the shared muzzle from `kit.js`, like every other skin.
+

@@ -49,8 +49,8 @@ export class Viewer {
     this.key = new THREE.DirectionalLight('#ffffff', 2.2);
     this.key.castShadow = true;
     this.key.shadow.mapSize.set(2048, 2048);
-    this.key.shadow.bias = -0.0004;
-    this.key.shadow.normalBias = 0.03;
+    this.key.shadow.bias = -0.0006;
+    this.key.shadow.normalBias = 0.07; // tall walls run nearly parallel to the light
     this.keyDir = new THREE.Vector3(0.3, 1, 0.4).normalize();
     this.rim = new THREE.DirectionalLight('#dbe8ff', 0.8);
     this.rim.position.set(-30, 20, -25);
@@ -148,8 +148,14 @@ export class Viewer {
     this.model = model;
     this.craft.add(model.object);
 
-    // Floor sits a fixed gap under the model; frame the camera on it.
-    const box = new THREE.Box3().setFromObject(model.object);
+    // Floor sits a fixed gap under the model; frame the camera on it
+    // (ignoring effects marked noFrame, e.g. glows bigger than the craft).
+    const box = new THREE.Box3();
+    model.object.updateMatrixWorld(true);
+    model.object.traverse((o) => {
+      if (o.isMesh && !o.userData.noFrame) box.union(new THREE.Box3().setFromObject(o, true));
+    });
+    if (box.isEmpty()) box.setFromObject(model.object);
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     this.arena.position.y = box.min.y - HOVER_GAP;
     const span = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);

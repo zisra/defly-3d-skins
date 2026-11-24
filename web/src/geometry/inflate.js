@@ -20,6 +20,7 @@ export function inflate(contour, holes, {
   base = () => 0, // (x, z) => surface under a dome
   band = 1, // printed outline width
   spacing,
+  pinned = null, // (x, z) => true for points on internal lines (panel seams)
 }) {
   contour = clean(contour);
   holes = holes.map(clean);
@@ -113,29 +114,40 @@ export function inflate(contour, holes, {
       W[j].set(i, (W[j].get(i) ?? 0) + w);
     }
   }
-  const u = new Float64Array(n0);
   const lists = W.map((m) => [...m]);
-  for (let it = 0; it < 900; it++) {
-    let change = 0;
-    for (let i = nEdge; i < n0; i++) {
-      let s = 0, ws = 0;
-      for (const [j, w] of lists[i]) { s += w * u[j]; ws += w; }
-      if (!ws) continue;
-      const next = u[i] + 1.85 * ((A[i] + s) / ws - u[i]);
-      change = Math.max(change, Math.abs(next - u[i]));
-      u[i] = next;
+  const solve = (fixed) => {
+    const u = new Float64Array(n0);
+    for (let it = 0; it < 900; it++) {
+      let change = 0;
+      for (let i = nEdge; i < n0; i++) {
+        if (fixed && fixed[i]) continue;
+        let s = 0, ws = 0;
+        for (const [j, w] of lists[i]) { s += w * u[j]; ws += w; }
+        if (!ws) continue;
+        const next = u[i] + 1.85 * ((A[i] + s) / ws - u[i]);
+        change = Math.max(change, Math.abs(next - u[i]));
+        u[i] = next;
+      }
+      if (change < 1e-6 * (R * R)) break;
     }
-    if (change < 1e-6 * (R * R)) break;
-  }
-  const M = Array.from(u, (v) => Math.sqrt(2 * Math.max(v, 0))); // round profile height
+    return Array.from(u, (v) => Math.sqrt(2 * Math.max(v, 0))); // round profile height
+  };
+  const M = solve(null);
+  // Optional second field, also held at zero along internal lines (pinned
+  // points): each panel between those lines gets its own gentle bulge.
+  const panels = pinned ? solve(pts.map((p, i) => i >= nEdge && pinned(p.x, p.y))) : null;
   const n = pts.length;
   const solid = mode === 'solid';
   const pos = new Float32Array((solid ? 2 : 1) * n * 3);
   const edge = new Float32Array((solid ? 2 : 1) * n);
-  const hTop = Float32Array.from(smoothValues(pts.map((p, i) => top(d[i], M[i], R)), 1));
-  const hBot = smoothValues(pts.map((p, i) => bottom(d[i], M[i], R)), 1);
+  // profile functions also get the point itself, for hand-sculpted heights
+  const hTop = Float32Array.from(smoothValues(pts.map((p, i) => top(d[i], M[i], R, panels ? panels[i] : 0, p.x, p.y)), 1));
+  const hBot = smoothValues(pts.map((p, i) => bottom(d[i], M[i], R, panels ? panels[i] : 0, p.x, p.y)), 1);
   // a dome follows the (blocky) surface beneath it, so smooth what it rests on
-  const under = solid ? null : smoothValues(pts.map((p) => base(p.x, p.y)), 4);
+  // (smoothed, but never below the real surface: a smoothed convex surface
+  // dips under its peak, and the part beneath would poke through)
+  const rawUnder = solid ? null : pts.map((p) => base(p.x, p.y));
+  const under = solid ? null : smoothValues(rawUnder, 4).map((v, i) => Math.max(v, rawUnder[i]));
   for (let i = 0; i < n; i++) {
     const p = pts[i];
     const y = solid ? hTop[i] : under[i] + hTop[i];
@@ -197,6 +209,166 @@ export function smoothNormals(geometry, neighbours, n, nEdge, solid, passes) {
     nrm.array.set(next);
   }
   nrm.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------------------
+// Hard-shell part: a crisp, tall solid over an outline (holes allowed).
+//   - a top surface over the outline: height top(x, z, panel, round)
+//   - a true vertical side wall that follows the outline exactly
+//   - small rounded bevels (radius `bevel`) where the wall meets top and bottom
+//   - a bottom surface: depth bottom(x, z, panel, round)
+// `round` is the smooth balloon field of the outline and `panel` the same held
+// at zero along pinned (drawn) lines, as in inflate(), for crowns and grooves.
+// Returns { geometry, points, hTop } like inflate().
+// ---------------------------------------------------------------------------
+export function shellPart(contour, holes, { top, bottom, bevel = 0.3, spacing = 0.12, pinned = null }) {
+  const loops = [clean(contour), ...holes.map(clean)];
+  // every ring of the bevel uses the same resampled points, so rings line up
+  const base = loops.map((l) => resample(l, spacing * 0.6));
+  const K = 4; // bevel steps (a quarter circle)
+  const rings = []; // rings[k][loop] -> points inset by bevel*(1 - cos)
+  for (let k = 0; k <= K; k++) {
+    const t = (k / K) * Math.PI / 2;
+    const inset = bevel * (1 - Math.cos(t));
+    rings.push(base.map((l, li) => (inset ? offsetOutline(l, li === 0 ? inset : -inset) : l)));
+  }
+  const capLoops = rings[K];
+
+  // cap: lattice + Delaunay inside the inset outline
+  const inside = (p) => {
+    let c = false;
+    for (const l of capLoops) {
+      for (let i = 0, j = l.length - 1; i < l.length; j = i++) {
+        if ((l[i].y > p.y) !== (l[j].y > p.y) && p.x < (l[j].x - l[i].x) * (p.y - l[i].y) / (l[j].y - l[i].y) + l[i].x) c = !c;
+      }
+    }
+    return c;
+  };
+  const segs = [];
+  for (const l of capLoops) for (let i = 0; i < l.length; i++) segs.push([l[i], l[(i + 1) % l.length]]);
+  const dist = (p) => {
+    let best = Infinity;
+    for (const [a, b] of segs) {
+      const ex = b.x - a.x, ey = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * ex + (p.y - a.y) * ey) / (ex * ex + ey * ey || 1)));
+      best = Math.min(best, (p.x - a.x - ex * t) ** 2 + (p.y - a.y - ey * t) ** 2);
+    }
+    return Math.sqrt(best);
+  };
+  const g = spacing;
+  const box = new THREE.Box2().setFromPoints(capLoops[0]);
+  const steiner = [];
+  for (let y = box.min.y + g * 0.433, row = 0; y < box.max.y; y += g * 0.866, row++) {
+    for (let x = box.min.x + (row % 2 ? g / 2 : 0); x < box.max.x; x += g) {
+      const p = new THREE.Vector2(x, y);
+      if (inside(p) && dist(p) > 0.45 * g) steiner.push(p);
+    }
+  }
+  const pts = [...capLoops.flat(), ...steiner];
+  const nEdge = pts.length - steiner.length;
+  const del = new Delaunator(pts.flatMap((p) => [p.x, p.y]));
+  const faces = [];
+  for (let t = 0; t < del.triangles.length; t += 3) {
+    const a = pts[del.triangles[t]], b = pts[del.triangles[t + 1]], c = pts[del.triangles[t + 2]];
+    if (inside(new THREE.Vector2((a.x + b.x + c.x) / 3, (a.y + b.y + c.y) / 3))) faces.push([del.triangles[t], del.triangles[t + 1], del.triangles[t + 2]]);
+  }
+  // balloon and panel fields on the cap (cotangent Poisson, as in inflate)
+  const n0 = pts.length;
+  const W = pts.map(() => new Map());
+  const A = new Float64Array(n0);
+  for (const f of faces) {
+    const P = f.map((k) => pts[k]);
+    const area = Math.abs((P[1].x - P[0].x) * (P[2].y - P[0].y) - (P[1].y - P[0].y) * (P[2].x - P[0].x)) / 2;
+    for (let k = 0; k < 3; k++) {
+      A[f[k]] += area / 3;
+      const i = f[k], j = f[(k + 1) % 3], o = P[(k + 2) % 3];
+      const ux = P[k].x - o.x, uy = P[k].y - o.y, vx = P[(k + 1) % 3].x - o.x, vy = P[(k + 1) % 3].y - o.y;
+      const w = Math.max(0, (ux * vx + uy * vy) / (Math.abs(ux * vy - uy * vx) || 1e-9)) / 2;
+      W[i].set(j, (W[i].get(j) ?? 0) + w);
+      W[j].set(i, (W[j].get(i) ?? 0) + w);
+    }
+  }
+  const lists = W.map((m) => [...m]);
+  const R = Math.max(...steiner.map(dist), 1e-3);
+  const solve = (fixed) => {
+    const u = new Float64Array(n0);
+    for (let it = 0; it < 900; it++) {
+      let change = 0;
+      for (let i = nEdge; i < n0; i++) {
+        if (fixed && fixed[i]) continue;
+        let sum = 0, ws = 0;
+        for (const [j, w] of lists[i]) { sum += w * u[j]; ws += w; }
+        if (!ws) continue;
+        const nxt = u[i] + 1.85 * ((A[i] + sum) / ws - u[i]);
+        change = Math.max(change, Math.abs(nxt - u[i]));
+        u[i] = nxt;
+      }
+      if (change < 1e-6 * R * R) break;
+    }
+    return Array.from(u, (v) => Math.sqrt(2 * Math.max(v, 0)));
+  };
+  const round = solve(null);
+  const panel = pinned ? solve(pts.map((p, i) => i >= nEdge && pinned(p.x, p.y))) : round;
+  // (d: distance to the original outline, so profiles can keep clear of the rim)
+  const capTop = pts.map((p, i) => top(p.x, p.y, panel[i], round[i], i < nEdge ? bevel : dist(p) + bevel));
+  const capBot = pts.map((p, i) => bottom(p.x, p.y, panel[i], round[i], i < nEdge ? bevel : dist(p) + bevel));
+
+  // assemble: top cap, top bevel rings, wall, bottom bevel rings, bottom cap
+  const pos = [];
+  const push = (x, y, z) => { pos.push(x, y, z); return pos.length / 3 - 1; };
+  const index = [];
+  const tri = (a, b, c, up) => {
+    const ax = pos[a * 3], az = pos[a * 3 + 2], bx = pos[b * 3], bz = pos[b * 3 + 2], cx = pos[c * 3], cz = pos[c * 3 + 2];
+    const cross = (bx - ax) * (cz - az) - (bz - az) * (cx - ax); // +y normal when negative (z = svg y)
+    if ((cross < 0) === up) index.push(a, b, c); else index.push(a, c, b);
+  };
+  const topIdx = pts.map((p, i) => push(p.x, capTop[i], p.y));
+  const botIdx = pts.map((p, i) => push(p.x, -capBot[i], p.y));
+  for (const [a, b, c] of faces) { tri(topIdx[a], topIdx[b], topIdx[c], true); tri(botIdx[a], botIdx[b], botIdx[c], false); }
+
+  // rim heights come from the cap's own boundary (same order as capLoops.flat())
+  let off = 0;
+  base.forEach((l, li) => {
+    const m = l.length;
+    const hT = (j) => capTop[off + j], hB = (j) => capBot[off + j];
+    // ring indices, top side: k = K (cap rim) ... 0 (wall top); bottom side mirrored
+    const topRings = [], botRings = [];
+    for (let k = 0; k <= K; k++) {
+      const t = (k / K) * Math.PI / 2, rise = bevel * Math.sin(t);
+      topRings.push(rings[k][li].map((p, j) => (k === K ? topIdx[off + j] : push(p.x, hT(j) - bevel + rise, p.y))));
+      botRings.push(rings[k][li].map((p, j) => (k === K ? botIdx[off + j] : push(p.x, -(hB(j) - bevel + rise), p.y))));
+    }
+    const outwardQuad = (a0, a1, b0, b1, centre) => {
+      // quad between two rings; orient so the normal points away from the solid
+      const ids = [a0, b0, a1, a1, b0, b1];
+      const v = (i) => new THREE.Vector3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+      const nrm = new THREE.Vector3().subVectors(v(b0), v(a0)).cross(new THREE.Vector3().subVectors(v(a1), v(a0)));
+      const out = v(a0).sub(centre);
+      if (nrm.dot(out) < 0) ids.reverse();
+      index.push(...ids);
+    };
+    for (let j = 0; j < m; j++) {
+      const jn = (j + 1) % m;
+      // a point just inside the solid (the inset rim), to tell outward from inward
+      const inner = (k, y) => new THREE.Vector3(rings[K][li][j].x, y, rings[K][li][j].y);
+      for (let k = 0; k < K; k++) {
+        outwardQuad(topRings[k][j], topRings[k][jn], topRings[k + 1][j], topRings[k + 1][jn], inner(k, pos[topRings[k][j] * 3 + 1] - bevel));
+        outwardQuad(botRings[k][j], botRings[k][jn], botRings[k + 1][j], botRings[k + 1][jn], inner(k, pos[botRings[k][j] * 3 + 1] + bevel));
+      }
+      // the wall
+      outwardQuad(topRings[0][j], topRings[0][jn], botRings[0][j], botRings[0][jn], inner(0, (pos[topRings[0][j] * 3 + 1] + pos[botRings[0][j] * 3 + 1]) / 2));
+    }
+    off += m;
+  });
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geometry.setIndex(index);
+  geometry.computeVertexNormals();
+  const allTop = [];
+  const hTop = [];
+  pts.forEach((p, i) => { allTop.push(p); hTop.push(capTop[i]); });
+  return { geometry, points: allTop, hTop: Float32Array.from(hTop), R, area: Math.abs(signedArea(capLoops[0])) };
 }
 
 // Half-height profile of a round tube of local half-width M at distance d

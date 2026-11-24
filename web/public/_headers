@@ -1,0 +1,10 @@
+# Cache rules for Cloudflare (Workers static assets read this file).
+# Build output in /assets has content hashes in its names, so it never changes.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Skin data and sprites: cache, but check back daily for edits
+/skins/*
+  Cache-Control: public, max-age=86400
+/skins-json/*
+  Cache-Control: public, max-age=86400

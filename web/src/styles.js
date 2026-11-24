@@ -146,9 +146,89 @@ function glossySet() {
 
 export function createStyles() {
   const sets = { matte: matteSet(), sprite: spriteSet(), glossy: glossySet() };
+  let tint = { body: '#3d5dff', trim: '#0a2fee' };
+  const tinted = new Set(); // image materials that follow the team colour
+
+  // Image-painted materials (for skins made from PNG layers): the style's own
+  // paint (or metal) with the layer image projected on it. Tinted ones are
+  // multiplied by the team colour, exactly like the game tints its sprites.
+  // Cached per style + image, and remembered on the material so a style switch
+  // can find the matching material in the other set.
+  const cache = new Map();
+  for (const [id, set] of Object.entries(sets)) {
+    Object.defineProperty(set, 'textured', {
+      enumerable: false,
+      value: (opts) => {
+        const key = `${id}|${opts.key}|${opts.tinted ? 't' : 'u'}|${opts.kind ?? 'paint'}|${opts.resting ? 'r' : ''}|${opts.hard ? 'h' : ''}`;
+        if (cache.has(key)) return cache.get(key);
+        const m = (opts.kind === 'metal' ? set.metal : set.body).clone();
+        m.name = '';
+        m.userData.tex = opts;
+        m.color.set(opts.tinted ? tint.body : '#ffffff');
+        if (m.sheenColor) m.sheenColor.set(opts.tinted ? tint.body : '#ffffff');
+        m.map = opts.map;
+        // the part's 3D outline already follows the art (holes included), so
+        // the image's own alpha isn't used to cut it: on steep sides, where the
+        // image is stretched, that cut leaves ragged drips
+        m.alphaTest = opts.alphaTest ?? 0;
+        if (opts.bump) { m.bumpMap = opts.bump; m.bumpScale = opts.bumpScale ?? 1; }
+        // On steep sides the art (projected from above) would stretch into
+        // streaks: fade to the layer's edge tone there (its outline shade,
+        // times the team colour when tinted), like the printed outlines
+        // wrapping down the sides of the other skins, and fade the relief too.
+        const sideTone = opts.sideTone ?? 0.6;
+        // hard shells: the whole bevel and wall take the edge tone; smooth parts
+        // only their near-vertical silhouette band, so their painted art stays
+        const [s0, s1] = opts.hard ? [0.55, 0.88] : [0.12, 0.38];
+        m.onBeforeCompile = (sh) => {
+          sh.uniforms.uSideTone = { value: sideTone };
+          sh.vertexShader = 'varying float vUp;\n' + sh.vertexShader.replace(
+            '#include <beginnormal_vertex>',
+            '#include <beginnormal_vertex>\n  vUp = abs(normalize(mat3(modelMatrix) * objectNormal).y);',
+          );
+          sh.fragmentShader = 'uniform float uSideTone;\nvarying float vUp;\n' + sh.fragmentShader
+            // the steeper the surface, the blurrier the art it samples: art
+            // stretched down a slope shades smoothly instead of streaking
+            .replace('#include <map_fragment>', `#ifdef USE_MAP
+  vec4 sampledDiffuseColor = texture2D( map, vMapUv, (1.0 - smoothstep(0.25, 0.9, vUp)) * 3.5 );
+  diffuseColor *= sampledDiffuseColor;
+#endif`)
+            // steepness from the per-pixel shading normal (smooth), not a
+            // per-vertex value, which zigzags across the mesh's triangles
+            .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+  {
+    float upness = abs( normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz ).y );
+    diffuseColor.rgb = mix( diffuse * uSideTone, diffuseColor.rgb, smoothstep( ${s0.toFixed(2)}, ${s1.toFixed(2)}, upness ) );
+  }`)
+            .replace('#include <bumpmap_pars_fragment>',
+              THREE.ShaderChunk.bumpmap_pars_fragment.replace('return vec2( dBx, dBy );', 'return vec2( dBx, dBy ) * smoothstep( 0.55, 0.88, vUp );'));
+        };
+        // the tone is baked per shader: materials sharing a compiled shader
+        // only get their onBeforeCompile run once
+        m.customProgramCacheKey = () => `image-side-${opts.bump ? 'b' : ''}-${opts.hard ? 'h' : 's'}-${sideTone.toFixed(3)}`;
+        if (opts.resting) {
+          // a part lying on another: near its rim the two surfaces almost touch,
+          // so bias its depth towards the camera to stop them flickering
+          m.polygonOffset = true;
+          m.polygonOffsetFactor = -1;
+          m.polygonOffsetUnits = -4;
+        }
+        m.needsUpdate = true;
+        if (opts.tinted) tinted.add(m);
+        cache.set(key, m);
+        return m;
+      },
+    });
+  }
+
   return {
     sets,
     setTint({ body, trim }) {
+      tint = { body, trim };
+      for (const m of tinted) {
+        m.color.set(body);
+        if (m.sheenColor) m.sheenColor.set(body);
+      }
       for (const set of Object.values(sets)) {
         set.body.color.set(body);
         set.trim.color.set(trim);
@@ -166,10 +246,9 @@ export function createStyles() {
 
 // Swap every role material in a built model for the given style's.
 export function applyStyle(object, set) {
+  const swap = (m) => (m.userData?.tex ? set.textured(m.userData.tex) : (set[m.name] ?? m));
   object.traverse((o) => {
     if (!o.isMesh) return;
-    o.material = Array.isArray(o.material)
-      ? o.material.map((m) => set[m.name] ?? m)
-      : (set[o.material.name] ?? o.material);
+    o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
   });
 }

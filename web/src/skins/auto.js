@@ -79,9 +79,13 @@ function buildAuto({ svg, mats }, cfg) {
         const h = hf.sample(x + a * step, z + b * step);
         if (Number.isFinite(h)) { sum += h; n++; }
       }
-      if (n) return sum / n + 0.03;
+      // never below the highest surface right here (blurring lowers peaks)
+      if (n) {
+        const here = hf.sample(x, z); // smooth (interpolated), so steep flanks don't make steps
+        return Math.max(sum / n, Number.isFinite(here) ? here : -Infinity) + 0.04;
+      }
     }
-    return 0.03;
+    return 0.04;
   };
 
   // Least-squares plane through the surface under an ellipse's footprint.
@@ -569,7 +573,7 @@ function detectRotors(elements) {
 
 // Frame aligned with a shape's main axis (snapped to the sprite axes when
 // close), so lofts run along the length of diagonal blades and sideways wings.
-function principalFrame(poly, turn = 0) {
+export function principalFrame(poly, turn = 0) {
   const c = poly.reduce((a, p) => a.add(p), new THREE.Vector2()).divideScalar(poly.length);
   let sxx = 0, syy = 0, sxy = 0;
   for (const p of poly) { const dx = p.x - c.x, dy = p.y - c.y; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }

@@ -1,8 +1,9 @@
 import { Viewer } from './viewer.js';
 import { createStyles, applyStyle, STYLE_LIST, SCENES } from './styles.js';
 import { SkinSvg } from './geometry/svg.js';
+import { ImageSkin } from './skins/image.js';
 import { SKINS } from './skins/index.js';
-import { TEAM_COLORS, SOURCE_BODY, SOURCE_TRIM, deriveTrim } from './palette.js';
+import { TEAM_COLORS, SOURCE_BODY, SOURCE_TRIM } from './palette.js';
 
 const $ = (sel) => document.querySelector(sel);
 const viewer = new Viewer($('#stage'));
@@ -19,11 +20,10 @@ fitInsets();
 const saved = load();
 const state = {
   skin: SKINS.find((s) => s.no === saved.skin && s.recipe) ?? SKINS.find((s) => s.recipe),
-  // a saved team colour that's no longer offered falls back to the default
-  colour: saved.colour && (saved.colour.name === 'Custom' || TEAM_COLORS.some((c) => c.body === saved.colour.body))
-    ? saved.colour : TEAM_COLORS[0],
+  // only the game's team colours; anything else saved earlier falls back to the default
+  colour: TEAM_COLORS.find((c) => c.body === saved.colour?.body) ?? TEAM_COLORS[0],
   style: STYLE_LIST.some((s) => s.id === saved.style) ? saved.style : STYLE_LIST[0].id,
-  svg: null, // SkinSvg of the skin on show
+  source: null, // the skin on show as loaded: SkinSvg or ImageSkin (viewBox, overlay)
 };
 
 // ---------------------------------------------------------------- colours
@@ -41,40 +41,23 @@ const swatchButtons = TEAM_COLORS.map((c) => {
   swatchBox.append(b);
   return { b, c };
 });
-const custom = document.createElement('label');
-custom.className = 'swatch custom';
-custom.title = 'Custom colour';
-custom.setAttribute('role', 'radio');
-custom.innerHTML = '<input type="color" aria-label="Custom colour" />';
-const picker = custom.querySelector('input');
-picker.addEventListener('input', () => setColour({ name: 'Custom', body: picker.value, trim: deriveTrim(picker.value) }));
-swatchBox.append(custom);
 
 function setColour(c) {
   state.colour = c;
   styles.setTint(c);
   document.documentElement.style.setProperty('--accent', c.body);
   document.documentElement.style.setProperty('--accent-dark', c.trim);
-  let matched = false;
-  for (const { b, c: tc } of swatchButtons) {
-    const on = tc.body === c.body && tc.trim === c.trim;
-    matched ||= on;
-    b.setAttribute('aria-checked', String(on));
-  }
-  custom.setAttribute('aria-checked', String(!matched));
-  if (!matched) {
-    custom.style.setProperty('--body', c.body);
-    custom.style.setProperty('--trim', c.trim);
-    picker.value = c.body;
-  }
+  for (const { b, c: tc } of swatchButtons) b.setAttribute('aria-checked', String(tc === c));
   tintThumbnails();
   save();
 }
 
-const tint = (text) => text
-  .replace(new RegExp(SOURCE_BODY, 'gi'), state.colour.body)
-  .replace(new RegExp(SOURCE_TRIM, 'gi'), state.colour.trim);
+const tint = (text, c = state.colour) => text
+  .replace(new RegExp(SOURCE_BODY, 'gi'), c.body)
+  .replace(new RegExp(SOURCE_TRIM, 'gi'), c.trim);
 const svgUrl = (text) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`;
+// SVG skins tint by swapping their colours in the text
+SkinSvg.prototype.overlay = function overlay(c) { return svgUrl(tint(this.text, c)); };
 
 // ---------------------------------------------------------------- styles
 const styleBox = $('#styles');
@@ -99,7 +82,7 @@ function setStyle(id) {
 
 // ---------------------------------------------------------------- skins
 const strip = $('#skins');
-const sources = new Map(); // skin no -> raw SVG text
+const sources = new Map(); // skin no -> (colour) => thumbnail URL
 const tiles = SKINS.map((skin) => {
   const b = document.createElement('button');
   b.type = 'button';
@@ -110,8 +93,11 @@ const tiles = SKINS.map((skin) => {
   b.innerHTML = `<span class="num">${skin.no}</span><img alt="" />${skin.recipe ? '<span class="badge">3D</span>' : ''}`;
   b.addEventListener('click', () => showSkin(skin));
   strip.append(b);
-  fetch(skin.svg).then((r) => r.text()).then((text) => {
-    sources.set(skin.no, text);
+  const ready = skin.file
+    ? ImageSkin.load(skin.file).then((img) => (c) => img.thumbnail(c))
+    : fetch(skin.svg).then((r) => r.text()).then((text) => (c) => svgUrl(tint(text, c)));
+  ready.then((thumb) => {
+    sources.set(skin.no, thumb);
     tintThumbnails();
   });
   return { b, skin };
@@ -119,10 +105,10 @@ const tiles = SKINS.map((skin) => {
 
 function tintThumbnails() {
   for (const { b, skin } of tiles) {
-    const text = sources.get(skin.no);
-    if (text) b.querySelector('img').src = svgUrl(tint(text));
+    const thumb = sources.get(skin.no);
+    if (thumb) b.querySelector('img').src = thumb(state.colour);
   }
-  if (state.svg) compareImg.src = svgUrl(tint(state.svg.text));
+  if (state.source) compareImg.src = state.source.overlay(state.colour);
 }
 
 let loadToken = 0;
@@ -134,7 +120,10 @@ async function showSkin(skin) {
   $('#skin-no').textContent = String(skin.no).padStart(2, '0');
   $('#skin-name').textContent = skin.name;
   document.title = `${skin.name} · Skin Hangar`;
-  for (const { b, skin: s } of tiles) b.setAttribute('aria-checked', String(s === skin));
+  for (const { b, skin: s } of tiles) {
+    b.setAttribute('aria-checked', String(s === skin));
+    if (s === skin) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
   save();
 
   const status = $('#status');
@@ -142,13 +131,14 @@ async function showSkin(skin) {
   try {
     if (!recipeCache.has(skin.no)) {
       const recipe = (await skin.recipe()).default;
-      const svg = await SkinSvg.load(skin.svg, recipe.pivot);
+      // SVG skins are read as vector shapes; image skins (PNG layers) by their recipe
+      const svg = recipe.load ? await recipe.load(skin) : await SkinSvg.load(skin.svg, recipe.pivot);
       recipeCache.set(skin.no, { recipe, svg });
     }
     if (token !== loadToken) return;
     const { recipe, svg } = recipeCache.get(skin.no);
-    state.svg = svg;
-    compareImg.src = svgUrl(tint(svg.text));
+    state.source = svg;
+    compareImg.src = svg.overlay(state.colour);
     // build once per skin; coming back to a skin just restyles the cached model
     if (!modelCache.has(skin.no)) modelCache.set(skin.no, recipe.build({ svg, mats: styles.sets[state.style] }));
     const model = modelCache.get(skin.no);
@@ -191,7 +181,7 @@ wipe.addEventListener('input', updateWipe);
 updateWipe();
 
 viewer.onFrame = () => {
-  const vb = state.svg?.viewBox;
+  const vb = state.source?.viewBox;
   if (!comparing || !vb) return;
   const a = viewer.project(vb.x, 0, vb.y);
   const b = viewer.project(vb.x + vb.w, 0, vb.y + vb.h);
@@ -253,7 +243,7 @@ if (STYLE_LIST.some((s) => s.id === params.get('style'))) state.style = params.g
 
 if (params.has('still')) {
   viewer.setTurntable(false);
-  viewer.state.spin = false;
+  viewer.state.spin = params.has('moving'); // &moving: frozen camera, but rotors and moving-only layers on
 }
 setStyle(state.style);
 setColour(state.colour);
