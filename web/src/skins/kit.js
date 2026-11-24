@@ -47,6 +47,7 @@ export function addMast(root, mats, { x = 0, z = 0, footY, topY }) {
 export function addMuzzle(root, mats, { x, y, z, radius }) {
   const bore = mesh(new THREE.CircleGeometry(radius, 28).rotateY(Math.PI / 2), mats.rubber, { cast: false });
   bore.position.set(x + 0.004, y, z);
+  bore.userData.muzzle = true; // the flight demo fires tracers from here
   root.add(bore);
   return bore;
 }

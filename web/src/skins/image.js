@@ -66,7 +66,9 @@ export class ImageSkin {
 
   // The sprite as the game draws it (moving state), tinted; for thumbnails
   // and the compare overlay. `crop` trims empty margins (thumbnails only).
-  render(colour, { size = 512, crop = false } = {}) {
+  // mapping 'multiply' tints like the game (image x team colour); 'trim'
+  // colours tinted art like the 3D models (see trimCanvas).
+  render(colour, { size = 512, crop = false, mapping = 'multiply' } = {}) {
     const c = document.createElement('canvas');
     c.width = c.height = size;
     const g = c.getContext('2d');
@@ -76,7 +78,8 @@ export class ImageSkin {
       const src = this.images[l.img];
       const s = l.size * scale;
       const x = size / 2 + l.cx * scale - s / 2, y = size / 2 + l.cz * scale - s / 2;
-      g.drawImage(l.tinted ? tintedCanvas(src.img, colour.body) : src.img, x, y, s, s);
+      const tinted = mapping === 'trim' ? trimCanvas(src, colour) : tintedCanvas(src.img, colour.body);
+      g.drawImage(l.tinted ? tinted : src.img, x, y, s, s);
     }
     if (!crop) return c.toDataURL();
     const d = g.getImageData(0, 0, size, size).data;
@@ -130,6 +133,31 @@ function tintedCanvas(img, colour) {
   return c;
 }
 
+// Tinted art coloured like the 3D models (styles.js textured materials): the
+// art's line shade becomes the trim colour, its fill the body colour, shades
+// between blend and darker shading goes proportionally darker (in sRGB).
+function trimCanvas(src, colour) {
+  src.tones ??= analyse(src).tones ?? false;
+  if (!src.tones) return tintedCanvas(src.img, colour.body);
+  const [line, fill] = src.tones;
+  const rgb = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
+  const trim = rgb(colour.trim), body = rgb(colour.body);
+  const c = document.createElement('canvas');
+  c.width = src.w;
+  c.height = src.h;
+  const g = c.getContext('2d');
+  const img = g.createImageData(src.w, src.h);
+  const d = src.data, o = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = (d[i] + d[i + 1] + d[i + 2]) / 765;
+    const t = Math.min(1, Math.max(0, (v - line) / (fill - line)));
+    for (let k = 0; k < 3; k++) o[i + k] = v >= line ? trim[k] + (body[k] - trim[k]) * t : trim[k] * (v / line);
+    o[i + 3] = d[i + 3];
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
 // ---------------------------------------------------------------------------
 // Layer analysis
 // ---------------------------------------------------------------------------
@@ -138,13 +166,13 @@ function analyse(src) {
   const n = w * h;
   const alpha = new Float32Array(n), lum = new Float32Array(n);
   let covered = 0, opaque = 0;
-  const hist = new Float64Array(40);
+  const hist = new Float64Array(40), histSum = new Float64Array(40);
   for (let i = 0; i < n; i++) {
     const a = data[i * 4 + 3] / 255;
     alpha[i] = a;
     lum[i] = (data[i * 4] + data[i * 4 + 1] + data[i * 4 + 2]) / 765;
     if (a > 0.04) covered++;
-    if (a >= 0.9) { opaque++; hist[Math.min(39, Math.floor(lum[i] * 40))]++; }
+    if (a >= 0.9) { opaque++; const b = Math.min(39, Math.floor(lum[i] * 40)); hist[b]++; histSum[b] += lum[i]; }
   }
   // two-tone ("flat") art: almost every opaque pixel is one of two shades,
   // fill and line. Hand-shaded art spreads across many shades.
@@ -158,7 +186,8 @@ function analyse(src) {
       for (let b = 0; b < 40; b++) if (Math.abs(b - b1) <= 1 || Math.abs(b - b2) <= 1) near += hist[b];
       flat = near / opaque >= 0.88;
       lineLevel = (Math.min(b1, b2) + Math.max(b1, b2) + 1) / 2 / 40;
-      tones = [(Math.min(b1, b2) + 0.5) / 40, (Math.max(b1, b2) + 0.5) / 40]; // line, fill
+      // line, fill: the exact shades (mean of each peak bin), not bin centres
+      tones = [Math.min(b1, b2), Math.max(b1, b2)].map((b) => histSum[b] / hist[b]);
     }
   }
   const opaqueShare = covered ? opaque / covered : 0;
@@ -544,6 +573,9 @@ function buildImageSkin(skin, mats, cfg) {
         kind: metal ? 'metal' : 'paint', resting: dome,
         hard: !!(sculpt?.shell && !dome),
         sideTone: an.tones ? Math.min(an.edgeTone, an.tones[0] + 0.05) : an.edgeTone,
+        // tinted art: its line shade is painted in the team's trim colour and
+        // its fill in the body colour, like the SVG skins' outlines
+        tones: layer.tinted ? an.tones : null,
       });
       const m = mesh(geometry, material);
       info.material = material;

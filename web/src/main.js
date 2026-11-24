@@ -3,7 +3,8 @@ import { createStyles, applyStyle, STYLE_LIST, SCENES } from './styles.js';
 import { SkinSvg } from './geometry/svg.js';
 import { ImageSkin } from './skins/image.js';
 import { SKINS } from './skins/index.js';
-import { TEAM_COLORS, SOURCE_BODY, SOURCE_TRIM } from './palette.js';
+import { TEAM_COLORS } from './palette.js';
+import { tintSvg, svgUrl } from './sprites.js';
 
 const $ = (sel) => document.querySelector(sel);
 const viewer = new Viewer($('#stage'));
@@ -52,10 +53,7 @@ function setColour(c) {
   save();
 }
 
-const tint = (text, c = state.colour) => text
-  .replace(new RegExp(SOURCE_BODY, 'gi'), c.body)
-  .replace(new RegExp(SOURCE_TRIM, 'gi'), c.trim);
-const svgUrl = (text) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`;
+const tint = (text, c = state.colour) => tintSvg(text, c);
 // SVG skins tint by swapping their colours in the text
 SkinSvg.prototype.overlay = function overlay(c) { return svgUrl(tint(this.text, c)); };
 
@@ -214,8 +212,29 @@ toggle('#spin', (on) => (viewer.state.spin = on && !comparing));
 toggle('#turntable', (on) => viewer.setTurntable(on));
 $('#compare-toggle').addEventListener('click', () => setCompare(!comparing));
 
+// ---------------------------------------------------------------- flight demo
+// Loaded only when asked for (its own bundle chunk).
+let demoRunning = false;
+async function playDemo(opts = {}) {
+  if (demoRunning) return;
+  demoRunning = true;
+  if (comparing) setCompare(false);
+  try {
+    const { startDemo } = await import('./demo/index.js');
+    await startDemo({ viewer, skins: SKINS, ...opts, onExit: () => { demoRunning = false; } });
+  } catch (err) {
+    console.error(err);
+    demoRunning = false;
+    document.body.classList.remove('demo-on');
+    viewer.resume();
+  }
+}
+$('#demo').addEventListener('click', () => playDemo());
+
 window.addEventListener('keydown', (e) => {
+  if (demoRunning) return;
   if (e.target instanceof HTMLInputElement && e.target.type !== 'range') return;
+  if (e.key === 'd' || e.key === 'D') playDemo();
   const built = SKINS.filter((s) => s.recipe);
   const i = built.indexOf(state.skin);
   if (e.key === 'ArrowRight' && !(e.target instanceof HTMLInputElement)) showSkin(built[(i + 1) % built.length]);
@@ -257,4 +276,6 @@ if (params.has('compare')) {
 if (params.has('cam')) viewer.lookFrom(...params.get('cam').split(',').map(Number));
 // let the first frames compile before anyone (e.g. the screenshot script) looks
 requestAnimationFrame(() => requestAnimationFrame(() => (window.__ready = true)));
+// ?demo starts the flight demo; ?demo=<seconds> jumps ahead, &still freezes (testing)
+if (params.has('demo')) playDemo({ seek: Number(params.get('demo')) || 0, still: params.has('still') });
 window.__viewer = viewer; // handy for debugging in the console

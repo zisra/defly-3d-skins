@@ -29,7 +29,7 @@ sprite:
   inside a guard ring sit at the ring's height. Stroke-only loops (propeller
   guards) become rings.
 - **Main rotors** are found automatically: any group of grey blade rects plus a
-  hub circle. They're built last, above everything, with a mast and blur disc,
+  hub circle. They're built last, above everything, with a mast,
   and they spin. Rotor craft get landing skids, propeller craft get legs
   under their motor pods, and a forward gun gets a muzzle opening.
 - **Propellers** need config naming their group and hubs, e.g.
@@ -110,7 +110,7 @@ The Top view should look like the sprite. `skin01.js` shows the method:
 - `slab(shape, { bottomY, height, bevel, grow })` extrudes a shape upward with soft edges.
 - `sidePlate(points, { thickness })` extrudes a side-view profile (fins).
 - `smoothLathe([[r, y], ...])` spins a profile into round parts (discs, domes).
-- `tubeAlong`, `cylinderX`, `roundedRect`, `blurDisc`, `mesh`.
+- `tubeAlong`, `cylinderX`, `roundedRect`, `mesh`.
 
 ### Materials and styles (`src/styles.js`)
 
@@ -141,9 +141,12 @@ each layer into 3D:
   flat-topped parts. A part's shape comes from its outline only: the art's
   drawn lines are printed on it, never cut in, as on every other skin.
 - **The art, projected.** The layer image is projected straight down onto its
-  parts, so the Top view is the sprite, and tinting works as in the game (image
-  × team colour, via `set.textured()` in `styles.js`). Two-tone art is enlarged
-  4× and snapped back to its two tones for crisp lines.
+  parts, so the Top view follows the sprite. Tinted art is coloured like the
+  SVG skins rather than by plain multiplication: its line shade becomes the
+  team's trim colour, its fill the body colour, shades in between blend and
+  darker shading goes proportionally darker (`set.textured()` in `styles.js`).
+  The 2D thumbnails keep the game's multiply tint. Two-tone art is enlarged 4×
+  and snapped back to its two tones for crisp lines.
 - **Stacking.** Layers sit just above what they cover, in the game's order.
   Parts drawn on top of another part with their own outline (a canopy) rest on
   it as low domes; even-toned overlays on hand-shaded art (painted shading) are

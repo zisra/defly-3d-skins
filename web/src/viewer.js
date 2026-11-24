@@ -68,6 +68,13 @@ export class Viewer {
     renderer.setAnimationLoop((now) => this.#frame(now));
   }
 
+  // Stop / restart rendering (the flight demo takes over the screen meanwhile).
+  pause() { this.renderer.setAnimationLoop(null); }
+  resume() {
+    this.timer.reset?.();
+    this.renderer.setAnimationLoop((now) => this.#frame(now));
+  }
+
   #buildArena() {
     // Grid floor in the game's arena colours; fog fades it into the sky.
     const c = document.createElement('canvas');

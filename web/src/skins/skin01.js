@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   loftOutline, offsetOutline, edgeBand, drapeDome, tubeAlong, sidePlate,
-  roundedRect, blurDisc, mesh,
+  roundedRect, mesh,
 } from '../geometry/shapes.js';
 import { addSkids, addMast, addMuzzle } from './kit.js';
 
@@ -188,9 +188,7 @@ export default {
       rotorParts.add(blade);
     }
     rotor.add(rotorParts);
-    const blur = blurDisc(hubR + 0.4, bladeLen);
-    blur.position.y = hubY - 0.05;
-    root.add(rotor, blur);
+    root.add(rotor);
 
     // --- Animation ------------------------------------------------------------------------
     let spool = null; // 0..1 rotor speed, eased towards the Spin toggle
@@ -200,7 +198,6 @@ export default {
         spool = THREE.MathUtils.damp(spool ?? (state.spin ? 1 : 0), state.spin ? 1 : 0, 1.6, dt);
         rotor.rotation.y -= dt * spool * 9.5;
         fan.rotation.z -= dt * spool * 30;
-        blur.material.opacity = spool;
       },
     };
   },

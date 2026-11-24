@@ -337,30 +337,6 @@ export function cylinderX(x0, x1, r0, r1 = r0, radial = 24) {
   return g;
 }
 
-// Translucent disc that suggests spinning blades: faint, densest near the tips.
-export function blurDisc(inner, outer) {
-  const c = document.createElement('canvas');
-  c.width = c.height = 256;
-  const g = c.getContext('2d');
-  const grad = g.createRadialGradient(128, 128, 0, 128, 128, 128);
-  const k = inner / outer;
-  grad.addColorStop(0, 'rgba(70,80,95,0)');
-  grad.addColorStop(k, 'rgba(90,100,115,0.02)');
-  grad.addColorStop(0.86, 'rgba(90,100,115,0.06)');
-  grad.addColorStop(0.95, 'rgba(90,100,115,0.13)');
-  grad.addColorStop(1, 'rgba(90,100,115,0)');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 256, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const m = new THREE.Mesh(
-    new THREE.CircleGeometry(outer, 96).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0, toneMapped: false, side: THREE.DoubleSide }),
-  );
-  m.renderOrder = 2;
-  return m;
-}
-
 export function mesh(geometry, material, { cast = true, receive = true } = {}) {
   const m = new THREE.Mesh(geometry, material);
   m.castShadow = cast;

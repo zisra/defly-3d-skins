@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { inflate, pillow, softCap, Heightfield, signedArea } from '../geometry/inflate.js';
 import { addSkids, addMast, addMuzzle, addLeg } from './kit.js';
-import { offsetOutline, sliceAt, tubeAlong, blurDisc, mesh, loftOutline, drapeDome, edgeBand } from '../geometry/shapes.js';
+import { offsetOutline, sliceAt, tubeAlong, mesh, loftOutline, drapeDome, edgeBand } from '../geometry/shapes.js';
 
 // ---------------------------------------------------------------------------
 // Automatic skin builder.
@@ -514,11 +514,8 @@ function buildAuto({ svg, mats }, cfg) {
         group.add(mesh(tube, roleStroke(el.stroke)));
       }
     }
-    const blur = blurDisc(1.8, reach);
-    blur.position.y = level - 0.06;
-    group.add(blur);
     root.add(group);
-    spinners.push({ group, speed: 9.5, blur });
+    spinners.push({ group, speed: 9.5 });
   }
 
   // extra rotating parts (e.g. a marker light circling a disc)
@@ -543,10 +540,7 @@ function buildAuto({ svg, mats }, cfg) {
     object: root,
     update(dt, t, state) {
       spool = THREE.MathUtils.damp(spool ?? (state.spin ? 1 : 0), state.spin ? 1 : 0, 1.6, dt);
-      for (const s of spinners) {
-        s.group.rotation.y -= dt * spool * s.speed;
-        if (s.blur) s.blur.material.opacity = spool;
-      }
+      for (const s of spinners) s.group.rotation.y -= dt * spool * s.speed;
     },
   };
 }

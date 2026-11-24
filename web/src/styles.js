@@ -148,6 +148,7 @@ export function createStyles() {
   const sets = { matte: matteSet(), sprite: spriteSet(), glossy: glossySet() };
   let tint = { body: '#3d5dff', trim: '#0a2fee' };
   const tinted = new Set(); // image materials that follow the team colour
+  const trimUniform = { value: new THREE.Color(tint.trim) }; // shared by tinted image materials
 
   // Image-painted materials (for skins made from PNG layers): the style's own
   // paint (or metal) with the layer image projected on it. Tinted ones are
@@ -177,35 +178,56 @@ export function createStyles() {
         // times the team colour when tinted), like the printed outlines
         // wrapping down the sides of the other skins, and fade the relief too.
         const sideTone = opts.sideTone ?? 0.6;
+        // Tinted art with a known line/fill shade: the art's grey is mapped onto
+        // the team's own colours (line shade -> trim, fill -> body, greys in
+        // between blend, darker shading goes proportionally darker than trim),
+        // so its lines match the SVG skins' trim-coloured outlines. A plain
+        // multiply (grey x body) makes them much darker and duller than trim.
+        const tones = opts.tinted && opts.tones ? opts.tones : null;
+        const artTint = tones ? `
+uniform vec3 uTrim;
+float toS( float c ) { return c <= 0.0031308 ? c * 12.92 : 1.055 * pow( c, 1.0 / 2.4 ) - 0.055; }
+vec3 toS( vec3 c ) { return vec3( toS( c.r ), toS( c.g ), toS( c.b ) ); }
+float toL( float c ) { return c <= 0.04045 ? c / 12.92 : pow( ( c + 0.055 ) / 1.055, 2.4 ); }
+vec3 toL( vec3 c ) { return vec3( toL( c.r ), toL( c.g ), toL( c.b ) ); }
+vec3 artTint( float g ) { // g: the art's shade, sRGB 0..1
+  const float LINE = ${tones[0].toFixed(4)}, FILL = ${tones[1].toFixed(4)};
+  vec3 trimS = toS( uTrim ), bodyS = toS( diffuse );
+  return toL( g >= LINE ? mix( trimS, bodyS, clamp( ( g - LINE ) / ( FILL - LINE ), 0.0, 1.0 ) ) : trimS * ( g / LINE ) );
+}
+` : '';
         // hard shells: the whole bevel and wall take the edge tone; smooth parts
         // only their near-vertical silhouette band, so their painted art stays
         const [s0, s1] = opts.hard ? [0.55, 0.88] : [0.12, 0.38];
         m.onBeforeCompile = (sh) => {
           sh.uniforms.uSideTone = { value: sideTone };
+          if (tones) sh.uniforms.uTrim = trimUniform;
           sh.vertexShader = 'varying float vUp;\n' + sh.vertexShader.replace(
             '#include <beginnormal_vertex>',
             '#include <beginnormal_vertex>\n  vUp = abs(normalize(mat3(modelMatrix) * objectNormal).y);',
           );
           sh.fragmentShader = 'uniform float uSideTone;\nvarying float vUp;\n' + sh.fragmentShader
+            .replace('void main() {', `${artTint}void main() {`)
             // the steeper the surface, the blurrier the art it samples: art
             // stretched down a slope shades smoothly instead of streaking
             .replace('#include <map_fragment>', `#ifdef USE_MAP
   vec4 sampledDiffuseColor = texture2D( map, vMapUv, (1.0 - smoothstep(0.25, 0.9, vUp)) * 3.5 );
-  diffuseColor *= sampledDiffuseColor;
+  ${tones ? `diffuseColor.rgb = artTint( toS( dot( sampledDiffuseColor.rgb, vec3( 1.0 / 3.0 ) ) ) );
+  diffuseColor.a *= sampledDiffuseColor.a;` : 'diffuseColor *= sampledDiffuseColor;'}
 #endif`)
             // steepness from the per-pixel shading normal (smooth), not a
             // per-vertex value, which zigzags across the mesh's triangles
             .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
   {
     float upness = abs( normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz ).y );
-    diffuseColor.rgb = mix( diffuse * uSideTone, diffuseColor.rgb, smoothstep( ${s0.toFixed(2)}, ${s1.toFixed(2)}, upness ) );
+    diffuseColor.rgb = mix( ${tones ? 'artTint( uSideTone )' : 'diffuse * uSideTone'}, diffuseColor.rgb, smoothstep( ${s0.toFixed(2)}, ${s1.toFixed(2)}, upness ) );
   }`)
             .replace('#include <bumpmap_pars_fragment>',
               THREE.ShaderChunk.bumpmap_pars_fragment.replace('return vec2( dBx, dBy );', 'return vec2( dBx, dBy ) * smoothstep( 0.55, 0.88, vUp );'));
         };
         // the tone is baked per shader: materials sharing a compiled shader
         // only get their onBeforeCompile run once
-        m.customProgramCacheKey = () => `image-side-${opts.bump ? 'b' : ''}-${opts.hard ? 'h' : 's'}-${sideTone.toFixed(3)}`;
+        m.customProgramCacheKey = () => `image-side-${opts.bump ? 'b' : ''}-${opts.hard ? 'h' : 's'}-${sideTone.toFixed(3)}-${tones ? tones.map((t) => t.toFixed(4)).join('/') : 'x'}`;
         if (opts.resting) {
           // a part lying on another: near its rim the two surfaces almost touch,
           // so bias its depth towards the camera to stop them flickering
@@ -225,6 +247,7 @@ export function createStyles() {
     sets,
     setTint({ body, trim }) {
       tint = { body, trim };
+      trimUniform.value.set(trim);
       for (const m of tinted) {
         m.color.set(body);
         if (m.sheenColor) m.sheenColor.set(body);
