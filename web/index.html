@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Skin Hangar</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="stage" aria-label="3D skin preview"></canvas>
+
+    <header class="hud top">
+      <div class="title">
+        <div class="eyebrow">Skin <span id="skin-no">01</span><span class="of"> / 15</span></div>
+        <h1 id="skin-name">Gunship</h1>
+      </div>
+      <div class="actions">
+        <div class="seg" role="group" aria-label="Camera">
+          <button type="button" data-view="orbit" aria-pressed="true">3D</button>
+          <button type="button" data-view="top" aria-pressed="false">Top</button>
+        </div>
+        <button type="button" class="pill" id="spin" aria-pressed="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12 4 4M12 12l8-8M12 12l-8 8M12 12l8 8" /><circle cx="12" cy="12" r="2.2" /></svg>
+          Spin
+        </button>
+        <button type="button" class="pill" id="turntable" aria-pressed="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6" /><path d="M20 4v4h-4" /></svg>
+          Turntable
+        </button>
+        <button type="button" class="pill" id="compare-toggle" aria-pressed="false" title="Top view with the original sprite overlaid (C)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M12 2v20" /></svg>
+          Compare
+        </button>
+      </div>
+    </header>
+
+    <div class="status" id="status" hidden></div>
+
+    <div class="compare" id="compare" hidden>
+      <img alt="" />
+      <span class="tag left">Sprite</span>
+      <span class="tag right">3D</span>
+      <div class="handle" aria-hidden="true"></div>
+      <input type="range" min="0" max="100" value="50" aria-label="Wipe between the original sprite and the 3D render" />
+    </div>
+
+    <footer class="dock">
+      <div class="row">
+        <span class="label">Style</span>
+        <div class="seg styles" id="styles" role="radiogroup" aria-label="Render style"></div>
+      </div>
+      <div class="row colours">
+        <span class="label">Paint</span>
+        <div class="swatches" id="swatches" role="radiogroup" aria-label="Team colour"></div>
+      </div>
+      <div class="row skins">
+        <span class="label">Skin</span>
+        <div class="skin-strip" id="skins" role="radiogroup" aria-label="Skin"></div>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
